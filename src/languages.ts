@@ -43,6 +43,10 @@ const LANGUAGE_CODE_NORMALIZATION: Record<string, LanguageCode> = {
     'zh-tw': 'zh',
     'zh-hk': 'zh',
     'zh-mo': 'zh',
+    'nan': 'hok',
+    'nan-tw': 'hok',
+    'nan-sg': 'hok',
+    'nan-cn': 'hok',
     'hi-in': 'hi',
     'bn-in': 'bn',
     'te-in': 'te',
@@ -72,6 +76,15 @@ function mapLanguageCodeForApi(code: LanguageCode): string {
     return LANGUAGE_CODE_TO_API_CODE[code] || code;
 }
 
+const HOKKIEN_INDICATOR_WORDS = [
+    '恁好', '阮', '汝', '佮', '無', '愛', '食', '袂', '呣', '媠', '欲', '看覓'
+];
+
+function looksLikeHokkienText(text: string): boolean {
+    const normalizedText = text.trim();
+    return HOKKIEN_INDICATOR_WORDS.some((word) => normalizedText.includes(word));
+}
+
 export function getLanguageName(code: string): string | null {
     const normalized = normalizeLanguageCode(code);
     return normalized ? SUPPORTED_LANGUAGES[normalized]?.name || null : null;
@@ -87,10 +100,17 @@ export async function detectLanguageReal(text: string) {
         const response = await translate(text, { to: 'en' });
         const rawCode = response.from.language.iso;
         const normalizedCode = normalizeLanguageCode(rawCode);
-        
-        const code = normalizedCode ?? rawCode;
-        const name = normalizedCode ? SUPPORTED_LANGUAGES[normalizedCode].name : 'Unknown / External Language';
-        
+
+        let code = normalizedCode ?? rawCode;
+        let name = normalizedCode ? SUPPORTED_LANGUAGES[normalizedCode].name : 'Unknown / External Language';
+
+        // If Google reports a Traditional Chinese dialect, Cantonese, or Hokkien-like code and the text contains
+        // Hokkien-specific markers, treat it as Hokkien for our supported language set.
+        if ((rawCode === 'zh-TW' || rawCode === 'nan' || rawCode === 'nan-tw' || rawCode === 'yue') && looksLikeHokkienText(text)) {
+            code = 'hok';
+            name = SUPPORTED_LANGUAGES.hok.name;
+        }
+
         return { code, name };
     } catch (error) {
         throw new Error(`Failed to detect language: ${error}`);
