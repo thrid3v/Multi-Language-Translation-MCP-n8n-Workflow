@@ -110,7 +110,15 @@ app.use(cors());
 let transport: SSEServerTransport | null = null;
 
 app.get('/sse', async (req, res) => {
+    if (transport) {
+        logger.info('Existing SSE transport found; closing before reconnecting.');
+        await transport.close();
+        transport = null;
+    }
     transport = new SSEServerTransport('/messages', res);
+    transport.onclose = () => {
+        transport = null;
+    };
     await server.connect(transport);
     logger.info('SSE Connection established.');
 });
