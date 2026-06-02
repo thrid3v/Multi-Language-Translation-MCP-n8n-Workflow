@@ -84,4 +84,3 @@ Example: start the server then open n8n (or import the workflow) and send a mess
 - Add Dockerfile / docker-compose for running MCP server and n8n together.
 
 ---
-Generated on 2026-06-02.
