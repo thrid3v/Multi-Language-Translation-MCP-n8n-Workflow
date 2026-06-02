@@ -3,6 +3,9 @@ import { z } from 'zod';
 // ==========================================
 // 1. TYPESCRIPT INTERFACES
 // ==========================================
+export const SUPPORTED_LANGUAGE_CODES = ['en', 'zh', 'ms', 'ta', 'hok', 'hi', 'bn', 'te', 'mr', 'gu'] as const;
+export type LanguageCode = (typeof SUPPORTED_LANGUAGE_CODES)[number];
+
 export interface LanguageInfo {
     name: string;
     region: 'Singapore' | 'India' | 'Singapore/India';
@@ -13,8 +16,8 @@ export interface LanguageInfo {
 // ==========================================
 export const TranslateSchema = z.object({
     text: z.string().min(1, "Text to translate cannot be empty"),
-    target_lang: z.string().min(2).max(3),
-    source_lang: z.string().optional()
+    target_lang: z.enum(SUPPORTED_LANGUAGE_CODES),
+    source_lang: z.enum(SUPPORTED_LANGUAGE_CODES).optional()
 });
 
 export const DetectSchema = z.object({

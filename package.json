@@ -1,7 +1,6 @@
 {
   "name": "multi-language-translation-mcp-n8n-workflow",
   "version": "1.0.0",
-  
   "description": "",
   "main": "dist/index.js",
   "scripts": {
@@ -17,6 +16,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "cors": "^2.8.6",
     "express": "^5.2.1",
+    "google-translate-api-x": "^10.7.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
