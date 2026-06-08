@@ -1,138 +1,123 @@
 import express from 'express';
 import cors from 'cors';
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import { CallToolRequestSchema, ListToolsRequestSchema, ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { z } from 'zod';
+import { randomUUID } from 'crypto';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 
-// Import from our new local modules
-import { TranslateSchema, DetectSchema, SUPPORTED_LANGUAGE_CODES } from './types.js';
-import { SUPPORTED_LANGUAGES, getLanguageName, detectLanguageReal, translateTextReal } from './languages.js';
-// Logger Utility
+import { TranslateSchema, DetectSchema } from './types.js';
+import { SUPPORTED_LANGUAGES, detectLanguageReal, translateTextReal } from './languages.js';
+
 const logger = {
     info: (msg: string, data?: any) => console.log(`[INFO] ${new Date().toISOString()} - ${msg}`, data ? JSON.stringify(data) : ''),
     error: (msg: string, err: unknown) => console.error(`[ERROR] ${new Date().toISOString()} - ${msg}`, err),
 };
 
-// Initialize MCP Server
-const server = new Server(
-    { name: 'multi-lang-translator-ts', version: '1.0.0' },
-    { capabilities: { tools: {} } }
-);
+function createServer(): McpServer {
+    const server = new McpServer(
+        { name: 'multi-lang-translator-ts', version: '1.0.0' }
+    );
 
-// Register Tools
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [
-        {
-            name: 'get_supported_languages',
-            description: 'Returns a list of all supported languages for translation.',
-            inputSchema: { type: 'object', properties: {} }
-        },
-        {
-            name: 'detect_language',
-            description: 'Detects the language of a given text.',
-            inputSchema: {
-                type: 'object',
-                properties: { text: { type: 'string', description: 'Text to analyze' } },
-                required: ['text']
-            }
-        },
-        {
-            name: 'translate_text',
-            description: 'Translates text to a target language. Supported codes: en, zh, ms, ta, hok, hi, bn, te, mr, gu.',
-            inputSchema: {
-                type: 'object',
-                properties: {
-                    text: { type: 'string', description: 'Text to translate' },
-                    target_lang: { type: 'string', description: 'ISO code of target language (e.g., en, hi, zh)', enum: SUPPORTED_LANGUAGE_CODES },
-                    source_lang: { type: 'string', description: 'Optional ISO code of source language', enum: SUPPORTED_LANGUAGE_CODES }
-                },
-                required: ['text', 'target_lang']
-            }
-        }
-    ]
-}));
+    server.registerTool('get_supported_languages', {
+        description: 'Returns a list of all supported languages for translation.',
+    }, async () => {
+        return { content: [{ type: 'text' as const, text: JSON.stringify(SUPPORTED_LANGUAGES, null, 2) }] };
+    });
 
-// Handle Tool Executions
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    logger.info(`Tool called: ${request.params.name}`);
-    
-    try {
-        if (request.params.name === 'get_supported_languages') {
-            return { content: [{ type: 'text', text: JSON.stringify(SUPPORTED_LANGUAGES, null, 2) }] };
-        }
-
-        if (request.params.name === 'detect_language') {
-            const { text } = DetectSchema.parse(request.params.arguments);
-            
-            // Call the real API and wait for the response
+    server.registerTool('detect_language', {
+        description: 'Detects the language of a given text.',
+        inputSchema: DetectSchema.shape,
+    }, async ({ text }) => {
+        logger.info('Tool called: detect_language');
+        try {
             const detected = await detectLanguageReal(text);
-            
-            return { 
-                content: [{ type: 'text', text: `Detected Language: ${detected.name} (${detected.code}).` }] 
+            return {
+                content: [{ type: 'text' as const, text: `Detected Language: ${detected.name} (${detected.code}).` }]
             };
+        } catch (error) {
+            logger.error('detect_language error', error);
+            throw error;
         }
+    });
 
-        if (request.params.name === 'translate_text') {
-            const { text, target_lang, source_lang } = TranslateSchema.parse(request.params.arguments);
-            
-            if (!getLanguageName(target_lang)) {
-                throw new McpError(ErrorCode.InvalidParams, `Language code '${target_lang}' is not supported.`);
-            }
-
-            // Call the real API and wait for the response
+    server.registerTool('translate_text', {
+        description: 'Translates text to a target language. Supported codes: en, zh, ms, ta, hok, hi, bn, te, mr, gu.',
+        inputSchema: TranslateSchema.shape,
+    }, async ({ text, target_lang, source_lang }) => {
+        logger.info('Tool called: translate_text');
+        try {
             const translation = await translateTextReal(text, target_lang, source_lang);
-            
-            return { 
-                content: [{ type: 'text', text: translation }] 
+            return {
+                content: [{ type: 'text' as const, text: translation }]
             };
+        } catch (error) {
+            logger.error('translate_text error', error);
+            throw error;
         }
+    });
 
-        throw new McpError(ErrorCode.MethodNotFound, `Tool not found: ${request.params.name}`);
+    return server;
+}
 
-    } catch (error) {
-        if (error instanceof z.ZodError) {
-            const zodError = error as z.ZodError;
-            const errorMsg = `Validation Error: ${zodError.issues.map((issue) => issue.message).join(', ')}`;
-            logger.error(errorMsg, zodError);
-            throw new McpError(ErrorCode.InvalidParams, errorMsg);
-        }
-        logger.error(`Tool execution error`, error);
-        throw error;
-    }
-});
-
-// Express & SSE Setup
+// Express & Streamable HTTP Setup
 const app = express();
 app.use(cors());
-//app.use(express.json());
+app.use(express.json());
 
-let transport: SSEServerTransport | null = null;
+const transports = new Map<string, StreamableHTTPServerTransport>();
 
-app.get('/sse', async (req, res) => {
-    if (transport) {
-        logger.info('Existing SSE transport found; closing before reconnecting.');
-        await transport.close();
-        transport = null;
-    }
-    transport = new SSEServerTransport('/messages', res);
-    transport.onclose = () => {
-        transport = null;
-    };
-    await server.connect(transport);
-    logger.info('SSE Connection established.');
-});
+app.post('/mcp', async (req, res) => {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
-app.post('/messages', async (req, res) => {
-    if (!transport) {
-        res.status(400).send('SSE transport not initialized.');
+    if (sessionId && transports.has(sessionId)) {
+        await transports.get(sessionId)!.handleRequest(req, res, req.body);
         return;
     }
-    await transport.handlePostMessage(req, res);
+
+    if (sessionId) {
+        res.status(404).json({ error: 'Session not found.' });
+        return;
+    }
+
+    const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (id) => {
+            transports.set(id, transport);
+            logger.info(`Session initialized: ${id}`);
+        },
+    });
+    transport.onclose = () => {
+        if (transport.sessionId) {
+            transports.delete(transport.sessionId);
+            logger.info(`Session closed: ${transport.sessionId}`);
+        }
+    };
+
+    // Each session gets its own McpServer instance — a single server cannot connect to multiple transports.
+    const server = createServer();
+    await server.connect(transport as Parameters<typeof server.connect>[0]);
+    await transport.handleRequest(req, res, req.body);
+});
+
+app.get('/mcp', async (req, res) => {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+    if (!sessionId || !transports.has(sessionId)) {
+        res.status(400).json({ error: 'Invalid or missing session ID.' });
+        return;
+    }
+    await transports.get(sessionId)!.handleRequest(req, res);
+});
+
+app.delete('/mcp', async (req, res) => {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+    if (!sessionId || !transports.has(sessionId)) {
+        res.status(400).json({ error: 'Invalid or missing session ID.' });
+        return;
+    }
+    await transports.get(sessionId)!.handleRequest(req, res);
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     logger.info(`Modular MCP Server running on http://localhost:${PORT}`);
-    logger.info(`SSE Endpoint for n8n: http://localhost:${PORT}/sse`);
+    logger.info(`MCP Endpoint: http://localhost:${PORT}/mcp`);
 });
