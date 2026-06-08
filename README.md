@@ -96,5 +96,4 @@ Example: start the server then open n8n (or import the workflow) and send a mess
 - Add automated tests for the tool handlers (`detect_language`, `translate_text`).
 - Add Dockerfile / docker-compose for running MCP server and n8n together.
 
----
-Updated 2026-06-08: migrated transport from SSE to Streamable HTTP (MCP spec 2025-03-26).
+
